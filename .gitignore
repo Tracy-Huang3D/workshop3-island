@@ -13,3 +13,6 @@ test-results/
 # Learner-local notes (not part of the distributed example)
 docs/my-progress.md
 docs/asset-inventory.md
+
+# 本地绑定角色（保留文件，不上传）
+/public/models/yaya-rigged.glb

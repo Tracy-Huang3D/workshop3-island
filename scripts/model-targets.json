@@ -1,0 +1,11 @@
+[
+  { "file": "garden-stepping-stone.glb", "triangles": 5000 },
+  { "file": "cream-daisies.glb", "triangles": 5000 },
+  { "file": "fruit-basket.glb", "triangles": 20000 },
+  { "file": "leaf-bowl.glb", "triangles": 20000 },
+  { "file": "woodland-lantern.glb", "triangles": 20000 },
+  { "file": "peach-mushroom.glb", "triangles": 20000 },
+  { "file": "forest-tree.glb", "triangles": 50000 },
+  { "file": "moss-rest-nest.glb", "triangles": 50000 },
+  { "file": "yaya.glb", "triangles": 30000 }
+]

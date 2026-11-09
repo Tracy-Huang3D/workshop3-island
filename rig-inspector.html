@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"><title>狐狸骨骼检查</title></head>
+<body><main id="view" aria-label="狐狸三维骨骼检查视图"></main><aside>
+<h1>狐狸骨骼检查</h1><p>独立检查页 · 不播放行走动画</p><p id="status" role="status">正在加载狐狸模型…</p>
+<fieldset id="tools" disabled><label>候选部位<select id="group"><option value="all">全部骨骼</option><option value="tail">尾部候选</option><option value="earA">耳朵 A 候选</option><option value="earB">耳朵 B 候选</option><option value="head">头／颈候选</option></select></label>
+<label>选择骨骼<select id="bone"></select></label><p id="detail"></p>
+<label>局部旋转轴<select id="axis"><option>X</option><option selected>Y</option><option>Z</option></select></label>
+<label>摆动幅度 <output id="amount">5°</output><input id="amplitude" type="range" min="0" max="12" step="0.5" value="5"></label>
+<label><input id="motion" type="checkbox"> 仅摆动选中骨骼</label>
+<label><input id="skeleton" type="checkbox" checked> 显示骨架与选中标记</label>
+<label><input id="names" type="checkbox" checked> 显示当前候选组名称</label>
+<button id="restore">停止摆动并恢复原姿态</button><button id="camera">重置视角</button>
+</fieldset><p class="note">黄色点为选中骨骼。骨骼转动会连带子骨骼，这是正常的层级行为。候选分组不是最终部位确认；切换 X / Y / Z 观察蒙皮影响。拖动环绕，滚轮缩放。</p>
+<details><summary>全部骨骼父子层级（控制台也有输出）</summary><pre id="tree"></pre></details><a href="/">返回小岛</a></aside>
+<div id="labels" aria-hidden="true"></div><script type="module" src="/src/rig-inspector.js"></script></body></html>

@@ -1,5 +1,5 @@
 {
-  "name": "yaya-secret-garden-workshop02",
+  "name": "workshop3-island",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -12,6 +12,12 @@
     "three": "0.186.1"
   },
   "devDependencies": {
+    "@gltf-transform/cli": "4.2.1",
+    "@gltf-transform/core": "4.5.1",
+    "@gltf-transform/extensions": "4.5.1",
+    "@gltf-transform/functions": "4.5.1",
+    "meshoptimizer": "0.24.0",
+    "sharp": "0.34.5",
     "vite": "8.3.4"
   }
 }

@@ -2,9 +2,28 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import './style.css';
+import { createYayaController } from './yaya-controller.js';
+import { createCollisionWorld } from './island-collision.js';
+import { measureRestActor, measureRestNest, reportRestMeasurements } from './nest-measurements.js';
+import { createDayNight } from './day-night.js';
 
 // Horizontal island expansion only; all prop positions and ground heights stay unchanged.
 const ISLAND_SCALE = 1.5;
+// 初始视角相对全景距离的缩放系数；数值越小，重置后镜头越靠近芽芽。
+const INITIAL_ZOOM = 0.75;
+// 滚轮允许的最近镜头距离；保持足够近以看清芽芽，同时避免穿入模型。
+const MIN_ZOOM_DISTANCE = 3.2;
+let yayaController;
+let collisionWorld;
+let dayNight;
+// Step 07 先测量再决定是否接入休息；不影响现有操控，开发预览控制台输出。
+let restActorMeasurement, restNestMeasurement;
+function reportRestWhenReady() {
+  if (restActorMeasurement && restNestMeasurement) {
+    const result = reportRestMeasurements(restActorMeasurement, restNestMeasurement);
+    if (result.fits) yayaController?.setRestNest({ ...restNestMeasurement, placement: nestPlacement, actor: restActorMeasurement });
+  }
+}
 
 
 // Step 08G: all planned scene assets are now loaded or reused.
@@ -34,7 +53,8 @@ controls.minPolarAngle = 0.25;
 controls.maxPolarAngle = Math.PI / 2 - 0.08;
 controls.target.set(0, 0.85, 0);
 
-scene.add(new THREE.HemisphereLight('#fffaf2', '#a0a989', 2.2));
+const hemisphere = new THREE.HemisphereLight('#fffaf2', '#a0a989', 2.2);
+scene.add(hemisphere);
 const sunlight = new THREE.DirectionalLight('#fff0d8', 2.5);
 sunlight.position.set(-5, 9, 6);
 sunlight.castShadow = true;
@@ -44,6 +64,7 @@ Object.assign(sunlight.shadow.camera, { left: -9 * ISLAND_SCALE, right: 9 * ISLA
 sunlight.shadow.normalBias = 0.04;
 sunlight.shadow.bias = -0.00015;
 scene.add(sunlight);
+dayNight = createDayNight({ scene, renderer, sunlight, hemisphere });
 const mat = color => new THREE.MeshStandardMaterial({ color, roughness: 0.85 });
 const materials = { grass: mat('#a2b58a'), earth: mat('#c29b74'), wood: mat('#b79572'), leaf: mat('#91a77b'), peach: mat('#e8b394'), cream: mat('#f5e4c7'), moss: mat('#b5c39b'), stone: mat('#c6bda5') };
 function mesh(geometry, material, parent, position = [0,0,0], scale = [1,1,1]) {
@@ -79,9 +100,10 @@ const yaya = placeholder('芽芽', -.5, 1.05, 1.7);
 mesh(new THREE.CapsuleGeometry(.42,.48,8,24), materials.cream,yaya,[0,.7,0]);
 mesh(sphere,materials.peach,yaya,[0,1.4,0],[.4,.12,.4]);
 const modelStatus = document.querySelector('#model-status');
-const modelUrl = `${import.meta.env.BASE_URL}models/yaya.glb`;
+const modelUrl = `${import.meta.env.BASE_URL}models/yaya-rigged.glb`;
 // Flat island top = .17 + .28 + .12; .59 is the earlier placeholder clearance.
-const modelPlacement = { height: 2.25, x: -.45, z: 1.05, yaw: .2, ground: .57, footOffset: 0 };
+// Step 07：缩小角色，为窝内约 1.0 的安全直径留出余量；保持脚底贴地。
+const modelPlacement = { height: 1.2, x: -.45, z: 1.05, yaw: .2, ground: .57, footOffset: 0 };
 let modelInfo;
 new GLTFLoader().load(modelUrl, gltf => {
   try {
@@ -98,13 +120,20 @@ new GLTFLoader().load(modelUrl, gltf => {
     const center = bounds.getCenter(new THREE.Vector3());
     root.position.set(modelPlacement.x - center.x, modelPlacement.ground - bounds.min.y + modelPlacement.footOffset, modelPlacement.z - center.z);
     model.traverse(object => { if (object.isMesh) { object.castShadow = true; object.receiveShadow = true; } });
+    {
+      restActorMeasurement = measureRestActor(root);
+      reportRestWhenReady();
+    }
+    const controller = createYayaController({ model, clips: gltf.animations, root, camera, controls, collisionWorld, dayNight, lanternPlacement });
     scene.add(root); root.updateMatrixWorld(true);
+    yayaController = controller;
+    reportRestWhenReady();
     scene.remove(yaya);
     const labelIndex = labels.findIndex(label => label.group === yaya);
     labels[labelIndex].element.remove(); labels.splice(labelIndex, 1);
     modelInfo = { originalBounds: { min: original.min.toArray(), max: original.max.toArray() }, scale: root.scale.toArray(), position: root.position.toArray(), yaw: root.rotation.y, worldBounds: new THREE.Box3().setFromObject(root,true), placement: modelPlacement };
     modelStatus.dataset.state = 'loaded';
-    modelStatus.textContent = '芽芽已加载';
+    modelStatus.textContent = '芽芽已加载 · WASD 可操控';
   } catch (error) { showModelError(error); }
 }, event => {
   modelStatus.textContent = event.lengthComputable && event.total > 0
@@ -119,7 +148,7 @@ const tree = placeholder('树', -2.4,-1.05,3.8);
 mesh(cylinder(.26,.43,2.3),materials.wood,tree,[0,1.15,0]);
 mesh(sphere,materials.leaf,tree,[.25,2.65,0],[1.65,.82,1.15]);
 const treeStatus = document.querySelector('#tree-status');
-const treeUrl = `${import.meta.env.BASE_URL}models/forest-tree.glb`;
+const treeUrl = `${import.meta.env.BASE_URL}models/optimized/forest-tree.glb`;
 const treePlacement = { height: 3.8, x: -2.05, z: -.95, yaw: -.12, ground: .57 };
 let treeInfo;
 new GLTFLoader().load(treeUrl, gltf => {
@@ -141,6 +170,7 @@ new GLTFLoader().load(treeUrl, gltf => {
     scene.remove(tree);
     const labelIndex = labels.findIndex(label => label.group === tree);
     labels[labelIndex].element.remove(); labels.splice(labelIndex,1);
+    collisionWorld.register('tree', root);
     treeInfo = { originalBounds: {min: original.min.toArray(),max: original.max.toArray()}, scale: root.scale.toArray(), position: root.position.toArray(), placement: treePlacement, worldBounds: new THREE.Box3().setFromObject(root,true) };
     treeStatus.dataset.state = 'loaded'; treeStatus.textContent = '树已加载';
   } catch (error) { showTreeError(error); }
@@ -158,7 +188,7 @@ const nest = placeholder('苔藓窝',nestPlacement.x,nestPlacement.z,.65);
 const ring = mesh(new THREE.TorusGeometry(.82,.18,16,48),materials.wood,nest,[0,.22,0]); ring.rotation.x = Math.PI/2;
 mesh(cylinder(.7,.7,.14),materials.moss,nest,[0,.14,0]);
 const nestStatus = document.querySelector('#nest-status');
-const nestUrl = `${import.meta.env.BASE_URL}models/moss-rest-nest.glb`;
+const nestUrl = `${import.meta.env.BASE_URL}models/optimized/moss-rest-nest.glb`;
 // Use footprint instead of height for a shallow resting nest; retain its proportions.
 let nestInfo;
 new GLTFLoader().load(nestUrl, gltf => {
@@ -179,6 +209,11 @@ new GLTFLoader().load(nestUrl, gltf => {
     scene.remove(nest);
     const index=labels.findIndex(label=>label.group===nest);
     labels[index].element.remove(); labels.splice(index,1);
+    collisionWorld.register('nest', root);
+    measureRestNest(root, nestPlacement).then(measurement => {
+      restNestMeasurement = measurement;
+      reportRestWhenReady();
+    }).catch(error => console.error('[Step 07] 尺寸测量失败', error));
     nestInfo={originalBounds:{min:original.min.toArray(),max:original.max.toArray()},scale:root.scale.toArray(),position:root.position.toArray(),placement:nestPlacement,worldBounds:new THREE.Box3().setFromObject(root,true)};
     nestStatus.dataset.state='loaded'; nestStatus.textContent='苔藓窝已加载';
   } catch(error) { showNestError(error); }
@@ -196,7 +231,7 @@ const lantern = placeholder('灯笼',lanternPlacement.x,lanternPlacement.z,1.05)
 mesh(new THREE.BoxGeometry(.4,.65,.4),mat('#e9c777'),lantern,[0,.4,0]);
 mesh(new THREE.ConeGeometry(.4,.28,6),materials.leaf,lantern,[0,.86,0]);
 const lanternStatus = document.querySelector('#lantern-status');
-const lanternUrl = `${import.meta.env.BASE_URL}models/woodland-lantern.glb`;
+const lanternUrl = `${import.meta.env.BASE_URL}models/optimized/woodland-lantern.glb`;
 let lanternInfo;
 new GLTFLoader().load(lanternUrl, gltf => {
   try {
@@ -212,9 +247,10 @@ new GLTFLoader().load(lanternUrl, gltf => {
     const center=bounds.getCenter(new THREE.Vector3());
     root.position.set(lanternPlacement.x-center.x,lanternPlacement.ground-bounds.min.y,lanternPlacement.z-center.z);
     model.traverse(object=>{if(object.isMesh){object.castShadow=true;object.receiveShadow=true;}});
-    scene.add(root); root.updateMatrixWorld(true); scene.remove(lantern);
+    scene.add(root); root.updateMatrixWorld(true); dayNight.setLantern(root); scene.remove(lantern);
     const index=labels.findIndex(label=>label.group===lantern);
     labels[index].element.remove(); labels.splice(index,1);
+    collisionWorld.register('lantern', root);
     lanternInfo={originalBounds:{min:original.min.toArray(),max:original.max.toArray()},scale:root.scale.toArray(),position:root.position.toArray(),placement:lanternPlacement,worldBounds:new THREE.Box3().setFromObject(root,true)};
     lanternStatus.dataset.state='loaded'; lanternStatus.textContent='灯笼已加载';
   } catch(error) { showLanternError(error); }
@@ -231,7 +267,7 @@ const basket = placeholder('果篮',2.05,1.45,.8);
 mesh(cylinder(.43,.32,.42),materials.wood,basket,[0,.21,0]);
 const handle = mesh(new THREE.TorusGeometry(.34,.045,8,32,Math.PI), materials.wood,basket,[0,.4,0]);
 const basketStatus = document.querySelector('#basket-status');
-const basketUrl = `${import.meta.env.BASE_URL}models/fruit-basket.glb`;
+const basketUrl = `${import.meta.env.BASE_URL}models/optimized/fruit-basket.glb`;
 const basketPlacement = { width: 1.15, x: 2.05, z: 1.45, yaw: 0, ground: .57 };
 let basketInfo;
 new GLTFLoader().load(basketUrl, gltf => {
@@ -251,6 +287,7 @@ new GLTFLoader().load(basketUrl, gltf => {
     scene.add(root); root.updateMatrixWorld(true); scene.remove(basket);
     const index=labels.findIndex(label=>label.group===basket);
     labels[index].element.remove(); labels.splice(index,1);
+    collisionWorld.register('basket', root);
     basketInfo={originalBounds:{min:original.min.toArray(),max:original.max.toArray()},scale:root.scale.toArray(),position:root.position.toArray(),placement:basketPlacement,worldBounds:new THREE.Box3().setFromObject(root,true)};
     basketStatus.dataset.state='loaded'; basketStatus.textContent='果篮已加载';
   } catch(error) { showBasketError(error); }
@@ -266,7 +303,7 @@ function showBasketError(error) {
 const bowl = placeholder('叶形水碗',3.2,1.25,.42);
 mesh(sphere,materials.leaf,bowl,[0,.13,0],[.52,.12,.32]);
 const bowlStatus = document.querySelector('#bowl-status');
-const bowlUrl = `${import.meta.env.BASE_URL}models/leaf-bowl.glb`;
+const bowlUrl = `${import.meta.env.BASE_URL}models/optimized/leaf-bowl.glb`;
 const bowlPlacement = { width: 1.0, x: 4.0, z: 1.25, yaw: 0, ground: .57 };
 let bowlInfo;
 new GLTFLoader().load(bowlUrl, gltf => {
@@ -286,6 +323,7 @@ new GLTFLoader().load(bowlUrl, gltf => {
     scene.add(root); root.updateMatrixWorld(true); scene.remove(bowl);
     const index=labels.findIndex(label=>label.group===bowl);
     labels[index].element.remove(); labels.splice(index,1);
+    collisionWorld.register('bowl', root);
     bowlInfo={originalBounds:{min:original.min.toArray(),max:original.max.toArray()},scale:root.scale.toArray(),position:root.position.toArray(),placement:bowlPlacement,worldBounds:new THREE.Box3().setFromObject(root,true)};
     bowlStatus.dataset.state='loaded'; bowlStatus.textContent='叶形水碗已加载';
   } catch(error) { showBowlError(error); }
@@ -302,7 +340,7 @@ const stool = placeholder('蘑菇凳',-3.2,.82,.95);
 mesh(cylinder(.22,.28,.5),materials.cream,stool,[0,.25,0]);
 mesh(sphere,materials.peach,stool,[0,.6,0],[.58,.22,.48]);
 const stoolStatus = document.querySelector('#stool-status');
-const stoolUrl = `${import.meta.env.BASE_URL}models/peach-mushroom.glb`;
+const stoolUrl = `${import.meta.env.BASE_URL}models/optimized/peach-mushroom.glb`;
 const stoolPlacement = { height: .95, x: -3.15, z: .85, yaw: 0, ground: .57 };
 let stoolInfo;
 new GLTFLoader().load(stoolUrl, gltf => {
@@ -312,6 +350,7 @@ new GLTFLoader().load(stoolUrl, gltf => {
     const root=new THREE.Group(); root.name='蘑菇凳 · 真实模型'; root.add(model); root.scale.setScalar(stoolPlacement.height/size.y); root.updateMatrixWorld(true);
     const bounds=new THREE.Box3().setFromObject(root,true), center=bounds.getCenter(new THREE.Vector3()); root.position.set(stoolPlacement.x-center.x,stoolPlacement.ground-bounds.min.y,stoolPlacement.z-center.z);
     model.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;}}); scene.add(root); scene.remove(stool); const i=labels.findIndex(x=>x.group===stool); labels[i].element.remove(); labels.splice(i,1);
+    collisionWorld.register('stool', root);
     stoolInfo={originalBounds:{min:original.min.toArray(),max:original.max.toArray()},scale:root.scale.toArray(),position:root.position.toArray(),placement:stoolPlacement}; stoolStatus.dataset.state='loaded'; stoolStatus.textContent='蘑菇凳已加载';
   } catch(e) { showStoolError(e); }
 }, e => { stoolStatus.textContent=e.lengthComputable&&e.total>0 ? `蘑菇凳正在加载 · ${Math.floor(e.loaded/e.total*100)}%` : '蘑菇凳正在加载'; }, showStoolError);
@@ -325,11 +364,11 @@ const stonePath = new THREE.CatmullRomCurve3([
 ].map(([x,z]) => new THREE.Vector3(x * ISLAND_SCALE / 1.5, 0, z * ISLAND_SCALE / 1.5)));
 const stoneCount = Math.ceil(stonePath.getLength() / .7) + 1;
 const stonePositions = stonePath.getSpacedPoints(stoneCount - 1).map((p,i) => [p.x, p.z, i % 2 ? -.18 : .12]);
-// Step 10A: change this one path to models/garden-stepping-stone.glb to切回原版。
+// Step 10A: change this one path to models/optimized/garden-stepping-stone.glb to切回原版。
 const stoneModelFile = 'models/optimized/garden-stepping-stone.glb';
 const stoneUrl=`${import.meta.env.BASE_URL}${stoneModelFile}`; const stoneStatus=document.querySelector('#stone-status'); let stoneInfo;
-new GLTFLoader().load(stoneUrl,gltf=>{const source=gltf.scene; source.updateMatrixWorld(true); const b=new THREE.Box3().setFromObject(source,true), size=b.getSize(new THREE.Vector3()), scale=.58/size.x; stonePositions.forEach(([x,z,yaw],i)=>{const m=source.clone(true); m.name=`踏脚石 ${i+1}`; m.scale.setScalar(scale*(.88+i%2*.14)); m.rotation.y=yaw; m.updateMatrixWorld(true); const bb=new THREE.Box3().setFromObject(m,true),c=bb.getCenter(new THREE.Vector3()); m.position.set(x-c.x,.57-bb.min.y,z-c.z); m.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;}}); scene.add(m);}); stoneInfo={count:stonePositions.length,positions:stonePositions}; stoneStatus.dataset.state='loaded'; stoneStatus.textContent=`踏脚石已加载 · 复用${stonePositions.length}块`;},()=>{stoneStatus.textContent='踏脚石正在加载';},e=>{stoneStatus.dataset.state='error';stoneStatus.textContent=`加载失败：${stoneUrl} — ${e.message||'网络请求失败'}。保留程序化石块。`;});
-const daisyUrl=`${import.meta.env.BASE_URL}models/cream-daisies.glb`; const daisyStatus=document.querySelector('#daisy-status'); let daisyInfo;
+new GLTFLoader().load(stoneUrl,gltf=>{const source=gltf.scene; source.updateMatrixWorld(true); const b=new THREE.Box3().setFromObject(source,true), size=b.getSize(new THREE.Vector3()), scale=.58/size.x; const stoneObjects=[]; stonePositions.forEach(([x,z,yaw],i)=>{const m=source.clone(true); m.name=`踏脚石 ${i+1}`; m.scale.setScalar(scale*(.88+i%2*.14)); m.rotation.y=yaw; m.updateMatrixWorld(true); const bb=new THREE.Box3().setFromObject(m,true),c=bb.getCenter(new THREE.Vector3()); m.position.set(x-c.x,.57-bb.min.y,z-c.z); m.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;}}); scene.add(m); stoneObjects.push(m);}); dayNight.setStoneObjects(stoneObjects, new THREE.Vector3(lanternPlacement.x, 0, lanternPlacement.z)); stoneInfo={count:stonePositions.length,positions:stonePositions}; stoneStatus.dataset.state='loaded'; stoneStatus.textContent=`踏脚石已加载 · 复用${stonePositions.length}块`;},()=>{stoneStatus.textContent='踏脚石正在加载';},e=>{stoneStatus.dataset.state='error';stoneStatus.textContent=`加载失败：${stoneUrl} — ${e.message||'网络请求失败'}。保留程序化石块。`;});
+const daisyUrl=`${import.meta.env.BASE_URL}models/optimized/cream-daisies.glb`; const daisyStatus=document.querySelector('#daisy-status'); let daisyInfo;
 new GLTFLoader().load(daisyUrl,gltf=>{const source=gltf.scene; source.updateMatrixWorld(true); const spots=[
   [-6.15,-1.6,.8],[-6.05,.5,1.4],[-5.35,2.65,-.4],[-2.7,4.15,.5],
   [.1,4.65,-.7],[2.8,4.1,.3],[6.3,.25,-.5],[5.65,-2.5,.7],
@@ -337,6 +376,8 @@ new GLTFLoader().load(daisyUrl,gltf=>{const source=gltf.scene; source.updateMatr
 ].map(([x,z,yaw])=>[x*ISLAND_SCALE/1.5,z*ISLAND_SCALE/1.5,yaw]); spots.forEach(([x,z,yaw],i)=>{const m=source.clone(true); m.name=`花草 ${i+1}`; m.scale.setScalar(.62*(i%2?.8:1)); m.rotation.y=yaw; m.updateMatrixWorld(true); const bb=new THREE.Box3().setFromObject(m,true),c=bb.getCenter(new THREE.Vector3()); m.position.set(x-c.x,.57-bb.min.y,z-c.z); m.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=true;}}); scene.add(m);}); daisyInfo={count:spots.length,spots}; daisyStatus.dataset.state='loaded'; daisyStatus.textContent=`花草已加载 · 复用${spots.length}簇`;},()=>{daisyStatus.textContent='花草正在加载';},e=>{daisyStatus.dataset.state='error';daisyStatus.textContent=`加载失败：${daisyUrl} — ${e.message||'网络请求失败'}。保留简化花草。`;});
 
 function resetView() {
+  yayaController?.reset();
+  dayNight?.resetDay();
   const aspect = viewport.clientWidth / viewport.clientHeight;
   const vertical = THREE.MathUtils.degToRad(camera.fov / 2);
   const horizontal = Math.atan(Math.tan(vertical)*aspect);
@@ -367,9 +408,17 @@ function resetView() {
   }
   controls.enableDamping = false;
   controls.reset();
+  // 初始镜头向芽芽所在区域偏移；把焦点略抬高，让芽芽落在画面中间偏下。
+  const yayaFocus = new THREE.Vector3(
+    modelPlacement.x,
+    modelPlacement.ground + modelPlacement.height * .62,
+    modelPlacement.z,
+  );
+  framingTarget.lerp(yayaFocus, .55);
+  const initialDistance = distance * INITIAL_ZOOM;
   controls.target.copy(framingTarget);
-  camera.position.copy(new THREE.Vector3(.2,.68,1).normalize().multiplyScalar(distance).add(controls.target));
-  controls.minDistance = 4 * ISLAND_SCALE; controls.maxDistance = distance*1.65;
+  camera.position.copy(new THREE.Vector3(.2,.68,1).normalize().multiplyScalar(initialDistance).add(controls.target));
+  controls.minDistance = MIN_ZOOM_DISTANCE; controls.maxDistance = distance*1.65;
   controls.update(); controls.saveState(); controls.enableDamping = true;
 }
 function resize() {
@@ -378,17 +427,25 @@ function resize() {
   camera.aspect = viewport.clientWidth / viewport.clientHeight;
   camera.updateProjectionMatrix(); resetView();
 }
+collisionWorld = createCollisionWorld({ outline, scene, placements: { tree: treePlacement, nest: nestPlacement, stool: stoolPlacement, lantern: lanternPlacement, basket: basketPlacement, bowl: bowlPlacement } });
 document.querySelector('#reset').addEventListener('click',resetView);
 window.addEventListener('resize',resize);
 resize();
 // Opt-in development-only inspection, never part of the production interface.
 if (import.meta.env.DEV && new URLSearchParams(location.search).has('qa')) {
-  window.sceneQA = { scene, camera, controls, get modelInfo() { return modelInfo; }, get treeInfo() { return treeInfo; }, get nestInfo() { return nestInfo; }, get lanternInfo() { return lanternInfo; }, get basketInfo() { return basketInfo; }, get bowlInfo() { return bowlInfo; }, get stoolInfo() { return stoolInfo; }, get stoneInfo() { return stoneInfo; }, get daisyInfo() { return daisyInfo; } };
+  window.sceneQA = { renderer, scene, camera, controls, collisionWorld, get yayaController() { return yayaController; }, get modelInfo() { return modelInfo; }, get treeInfo() { return treeInfo; }, get nestInfo() { return nestInfo; }, get lanternInfo() { return lanternInfo; }, get basketInfo() { return basketInfo; }, get bowlInfo() { return bowlInfo; }, get stoolInfo() { return stoolInfo; }, get stoneInfo() { return stoneInfo; }, get daisyInfo() { return daisyInfo; } };
 }
 const labelPosition = new THREE.Vector3();
+let previousFrame = performance.now();
 renderer.setAnimationLoop(()=>{
+  const now = performance.now();
+  const delta = Math.min((now - previousFrame) / 1000, 0.1);
+  previousFrame = now;
   controls.update();
+  yayaController?.update(delta);
+  dayNight?.update(delta);
   renderer.render(scene,camera);
+  if (import.meta.env.DEV) renderer.domElement.dispatchEvent(new Event("record-frame"));
   for (const {group,height,element} of labels) {
     labelPosition.copy(group.position); labelPosition.y += height;
     labelPosition.project(camera);
@@ -397,3 +454,12 @@ renderer.setAnimationLoop(()=>{
     element.style.top = `${(-labelPosition.y*.5+.5)*viewport.clientHeight}px`;
   }
 });
+
+if (import.meta.env.DEV && !new URLSearchParams(location.search).has('gif') && new URLSearchParams(location.search).has('record')) {
+  import('./step05-record.js').then(({ addRecordingButton }) => addRecordingButton(renderer.domElement, () => ({scene, camera, controls, controller: yayaController, world: collisionWorld})));
+}
+
+// Development-only recorder: removed from production builds.
+if (import.meta.env.DEV && new URLSearchParams(location.search).has('gif')) {
+  import('./gif-recorder.js').then(({ addGifRecorder }) => addGifRecorder());
+}
